@@ -1,7 +1,10 @@
+// lib/main.dart
+
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:io'; // <--- THIS IS CRUCIAL FOR PLATFORM CHECKS
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:scanwell/health_analyzer.dart'; // Make sure this path is correct for your project 'scanwell'
 
 void main() {
   runApp(const MyApp());
@@ -13,12 +16,12 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'ScanWell', // Your app's title
+      title: 'ScanWell',
       theme: ThemeData(
-        primarySwatch: Colors.deepPurple, // You can choose any color
+        primarySwatch: Colors.deepPurple,
         visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
-      home: const ProductScanScreen(), // Our new starting screen
+      home: const ProductScanScreen(),
     );
   }
 }
@@ -31,30 +34,32 @@ class ProductScanScreen extends StatefulWidget {
 }
 
 class _ProductScanScreenState extends State<ProductScanScreen> {
+  // --- VARIABLES ---
   XFile? _pickedImage;
   final ImagePicker _picker = ImagePicker();
-  String _recognizedText = ''; // NEW: Variable to store the OCR result
+  String _recognizedText = '';
+  HealthAnalysisResult? _healthResult;
 
-  // Function to pick image from gallery (unchanged from previous step)
+  // --- FUNCTIONS (MUST BE INSIDE THIS CLASS) ---
+
   Future<void> _pickImageFromGallery() async {
     final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
     if (image != null) {
       setState(() {
         _pickedImage = image;
-        _recognizedText = ''; // Clear previous text when new image selected
+        _recognizedText = '';
       });
       print('Image picked from gallery: ${image.path}');
     }
   }
 
-  // Function to take image from camera (unchanged from previous step, with desktop conditional fix)
   Future<void> _takeImageWithCamera() async {
     if (Platform.isAndroid || Platform.isIOS) {
       final XFile? image = await _picker.pickImage(source: ImageSource.camera);
       if (image != null) {
         setState(() {
           _pickedImage = image;
-          _recognizedText = ''; // Clear previous text
+          _recognizedText = '';
         });
         print('Image taken with camera: ${image.path}');
       }
@@ -69,8 +74,22 @@ class _ProductScanScreenState extends State<ProductScanScreen> {
     }
   }
 
-  // NEW FUNCTION: _performOcr - This is where the magic happens!
   Future<void> _performOcr() async {
+    if (!(Platform.isAndroid || Platform.isIOS)) {
+      setState(() {
+        _recognizedText = 'OCR is not directly supported on this desktop platform (Windows).';
+        _healthResult = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('OCR not available on desktop. This feature is for mobile devices.'),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      print('OCR not available on desktop for google_mlkit_text_recognition.');
+      return;
+    }
+
     if (_pickedImage == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select an image first!')),
@@ -79,32 +98,42 @@ class _ProductScanScreenState extends State<ProductScanScreen> {
     }
 
     setState(() {
-      _recognizedText = 'Analyzing image...'; // Show a loading message while processing
+      _recognizedText = 'Analyzing image...';
+      _healthResult = null;
     });
 
-    // Prepare the image for ML Kit
     final inputImage = InputImage.fromFilePath(_pickedImage!.path);
-    // Initialize the text recognizer for Latin script (English, etc.)
     final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
     try {
-      // Process the image and get the recognized text
       final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
       setState(() {
-        _recognizedText = recognizedText.text; // Update the UI with the result
+        _recognizedText = recognizedText.text;
       });
+
+      final HealthAnalyzer analyzer = HealthAnalyzer();
+      final HealthAnalysisResult result = analyzer.analyzeProduct(recognizedText.text);
+      setState(() {
+        _healthResult = result;
+      });
+
       print('OCR Result:\n${recognizedText.text}');
+      print('Health Analysis Result: ${result.message} (Score: ${result.healthScore})');
+      result.warnings.forEach((warning) => print('Warning: $warning'));
+      result.detectedNutrients.forEach((key, value) => print('$key: $value')); // Print detected nutrients
+
     } catch (e) {
-      // Handle any errors during OCR
       setState(() {
         _recognizedText = 'Error during OCR: $e';
+        _healthResult = null;
       });
       print('Error during OCR: $e');
     } finally {
-      // Important: Close the recognizer to release resources
       textRecognizer.close();
     }
   }
+
+  // --- BUILD METHOD ---
 
   @override
   Widget build(BuildContext context) {
@@ -114,14 +143,12 @@ class _ProductScanScreenState extends State<ProductScanScreen> {
         backgroundColor: Theme.of(context).primaryColor,
       ),
       body: Center(
-        child: SingleChildScrollView( // Added for scrolling if content gets long
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(16.0),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
-              // Display the picked image (optional, but good for feedback)
               if (_pickedImage != null) ...[
-                // This uses dart:io.File to display the image from its path
                 Image.file(File(_pickedImage!.path), height: 200, fit: BoxFit.contain),
                 const SizedBox(height: 20),
                 Text(
@@ -132,15 +159,14 @@ class _ProductScanScreenState extends State<ProductScanScreen> {
                 const SizedBox(height: 20),
               ],
 
-              // Buttons for picking/taking images (from previous step)
               ElevatedButton.icon(
-                onPressed: _pickImageFromGallery,
+                onPressed: _pickImageFromGallery, // Correctly references the method within the class
                 icon: const Icon(Icons.photo_library),
                 label: const Text('Pick from Gallery'),
               ),
               const SizedBox(height: 20),
               ElevatedButton.icon(
-                onPressed: (Platform.isAndroid || Platform.isIOS) ? _takeImageWithCamera : null,
+                onPressed: (Platform.isAndroid || Platform.isIOS) ? _takeImageWithCamera : null, // Correctly references
                 icon: const Icon(Icons.camera_alt),
                 label: const Text('Take Photo'),
               ),
@@ -155,20 +181,27 @@ class _ProductScanScreenState extends State<ProductScanScreen> {
                 ),
               const SizedBox(height: 30),
 
-              // NEW: Analyze Button - now calls _performOcr
               ElevatedButton(
-                onPressed: _performOcr, // Call the new OCR function
+                onPressed: (Platform.isAndroid || Platform.isIOS) ? _performOcr : null,
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
                   textStyle: const TextStyle(fontSize: 18),
                 ),
                 child: const Text('Analyze Product (OCR)'),
               ),
+              if (!(Platform.isAndroid || Platform.isIOS))
+                const Padding(
+                  padding: EdgeInsets.only(top: 10.0),
+                  child: Text(
+                    'OCR is primarily supported on mobile devices.',
+                    style: TextStyle(color: Colors.grey),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
               const SizedBox(height: 30),
 
-              // NEW: Display OCR Result
               const Text(
-                'OCR Result:',
+                'Raw OCR Result:',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 10),
@@ -179,13 +212,60 @@ class _ProductScanScreenState extends State<ProductScanScreen> {
                   border: Border.all(color: Colors.grey),
                   borderRadius: BorderRadius.circular(8.0),
                 ),
-                constraints: const BoxConstraints(minHeight: 100), // Ensure some height
+                constraints: const BoxConstraints(minHeight: 100),
                 child: Text(
                   _recognizedText.isEmpty ? 'No text recognized yet.' : _recognizedText,
                   textAlign: TextAlign.left,
                   style: const TextStyle(fontSize: 16),
                 ),
               ),
+              const SizedBox(height: 30),
+
+              const Text(
+                'Health Analysis:',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(12.0),
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.blueGrey),
+                  borderRadius: BorderRadius.circular(8.0),
+                ),
+                child: _healthResult == null
+                    ? const Text('No health analysis performed yet.')
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _healthResult!.message,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: _healthResult!.isHealthy ? Colors.green : Colors.red,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text('Health Score: ${_healthResult!.healthScore}/10'),
+                          if (_healthResult!.warnings.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            const Text('Warnings:', style: TextStyle(fontWeight: FontWeight.bold)),
+                            ..._healthResult!.warnings
+                                .map((w) => Text('- $w', style: const TextStyle(color: Colors.orange)))
+                                .toList(),
+                          ],
+                          if (_healthResult!.detectedNutrients.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            const Text('Detected Nutrients:', style: TextStyle(fontWeight: FontWeight.bold)),
+                            ..._healthResult!.detectedNutrients.entries
+                                .map((e) => Text('${e.key}: ${e.value}'))
+                                .toList(),
+                          ],
+                        ],
+                      ),
+              ),
+              const SizedBox(height: 20),
             ],
           ),
         ),
